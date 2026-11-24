@@ -39,6 +39,32 @@ migration once.
 So the provider's lock is correct per transaction, but EF's migrator never re-checks the history after a
 transaction-scoped lock is reacquired. Npgsql is the provider that uses `LockReleaseBehavior.Transaction`.
 
-## Fix
+## Fix (this branch)
 
-See the [`fix`](../../tree/fix) branch.
+**Workaround, Npgsql 11.0.0 as released:**
+[`AdvisoryLockHistoryRepository`](AdvisoryLockHistoryRepository.cs), registered with
+`options.ReplaceService<IHistoryRepository, AdvisoryLockHistoryRepository>()`. It takes a session-level
+`pg_advisory_lock` and declares `LockReleaseBehavior.Connection`, so the migrator takes the lock once, before it
+reads the history, and holds it until the run ends, as on SQL Server. With it, `dotnet run` passes (3 of 3 runs):
+
+```
+OK   instance 1
+OK   instance 2
+OK   instance 3
+history rows: 3 (3 expected)
+```
+
+**Proposed Npgsql change:** [`upstream/efcore.pg-hotfix-11.0.1.patch`](upstream/efcore.pg-hotfix-11.0.1.patch),
+against `hotfix/11.0.1` (applies cleanly with `git apply`): the same change in `NpgsqlHistoryRepository` itself.
+The lock key is a number computed from the history table's schema-qualified name, so no text is spliced into the
+SQL. The patch has not been built or run in Npgsql's own test suite; the workaround above is the same code,
+outside the provider.
+
+**Trade-off:** a session-level advisory lock needs a session that lasts the whole run, so it does not hold through
+PgBouncer in transaction pooling mode, where `LOCK TABLE` inside a transaction does. Running migrations through a
+transaction-mode pooler is already unsafe for other reasons, and the same is true of SQL Server's session lock.
+
+**The other place to fix it** is EF Core's migrator: after reacquiring a `LockReleaseBehavior.Transaction` lock
+for the next migration, re-read the history and skip migrations another instance applied meanwhile. That would
+protect any provider using transaction-scoped locks, but it changes `Migrator` and `MigrationCommandExecutor`, so
+it is described here rather than patched.

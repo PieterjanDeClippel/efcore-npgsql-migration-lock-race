@@ -7,7 +7,10 @@ namespace Repro;
 public sealed class AppDb(string connectionString) : DbContext
 {
     protected override void OnConfiguring(DbContextOptionsBuilder options)
-        => options.UseNpgsql(connectionString);
+        => options
+            .UseNpgsql(connectionString)
+            // The workaround (fix branch): hold the migration lock for the whole run.
+            .ReplaceService<IHistoryRepository, AdvisoryLockHistoryRepository>();
 }
 
 // Three ordinary migrations. The second one takes a few seconds, the way a data migration or an index build does,
